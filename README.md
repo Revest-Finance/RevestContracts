@@ -1,1 +1,1 @@
-Revest Contracts repo
+Public Revest Contracts Repository
