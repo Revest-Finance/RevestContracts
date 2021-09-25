@@ -1,0 +1,39 @@
+{
+    "name":"Revest Staking Claims",
+    "description":"Claim staking rewards for your Revest FNFT",
+    "author":"RobAnon",
+    "inputs":[
+        {
+            "label":"Select length of staking period",
+            "primitive":"multi_radio",
+            "encode":"uint256",
+            "extra_data": { 
+                "options": [
+                    {
+                        "text": "1 month",
+                        "value": "1"
+                    },
+                    {
+                        "text": "3 months",
+                        "value": "3"
+                    },
+                    {
+                        "text": "6 months",
+                        "value": "6"
+                    },
+                    {
+                        "text": "12 months",
+                        "value": "12"
+                    }
+                ]
+            },
+            "index":0
+        }
+    ],
+    "updates":[
+        {
+            "label":"Claim staking rewards",
+            "primitive":"button"
+        }
+    ]
+}

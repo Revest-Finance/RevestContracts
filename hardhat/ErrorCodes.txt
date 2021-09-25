@@ -1,0 +1,75 @@
+// SPDX-License-Identifier: GNU-GPL v3.0 or later
+
+E001 - something went wrong with minting a time lock
+E002 - time lock unlock time is in the past
+E003 – for some reason, a number that should not be less than zero, is less than zero or zero
+E004 – an address is set to the null address that should never be the null address
+E005 - fee insufficient for current valuation of assets – plese check to ensure you are sending the correct amount of your native currency
+E006 – Requested quantity for withdrawal of FNFT of given ID is greater than quantity the user making the call has available of that ID
+E007 - FNFT with the requested ID does not exist
+E008 – Only address and value locks may be unlocked by external calls
+E009 – Address locks may only be unlocked by the address specified at creation
+E010 – Time lock is not yet mature and it is therefore not possible to withdraw from it
+E011 – Time lock with requested ID does not exist
+E012 – Value lock with requested ID does not exist
+E013 – Address lock with requested ID does not exist
+E014 – Something went wrong during token withdrawal
+E015 – Insufficient funds for a deposit
+E016 – This method can only be called by valid Revest contracts
+E017 – This method can only be called by the Revest central contract
+E018 – Value lock is not yet mature and therefore cannot be withdrawn from
+E019 – Address lock is not yet unlocked and therefore cannot be withdrawn from
+E020 – Value lock is not yet mature and therefore cannot be unlocked
+E021 – Unknown error led to the FNFT not being able to be ripened
+E022 – Requested quantity of FNFT is greater than existing supply
+E023 – No splits are available for the given FNFT ID
+E024 – Requested split does not add up to 100% of the FNFT's value
+E025 – Cannot burn more tokens than exist in the supply
+E026 – Combo AND lock is not mature - one or more of the conditions returned false
+E027 – Combo OR lock is not mature – none of the statements returned true
+E028 – The requested asset is not a tracked asset
+E029 – The requested FNFT is not an extended maturity asset and cannot have its maturity extended
+E030 – The requested extened maturity date happens before the existing maturity date and does not constitute an extension.
+E031 – The handle maturity extension method in TokenVault should never be called for tokens that have the same ID
+E032 – The user making the call does not hold any FNFTs
+E033 – The user making the call to deposit addition funds in the FNFT must distribute those funds between all holders or hold their own FNFTs
+E034 – The FNFT requested does not support multiple deposits
+E035 – The FNFT is no longer accepting additional deposits
+E036 – Migrations are currently locked to another user for at most 10 minutes
+E037 – User making attempt to migrate is not whitelisted for migrations at this time
+E038 – The Revest Token Vault contract does not own the requested lockID
+E039 – The Unicrypt lock being migrated has an unlock date that releases after the one being passed to Revest
+E040 – You must migrate the entire Unicrypt lock to Revest
+E041 – Lock mismatch!
+E042 – RESERVED
+E043 – Unicrypt lock is already claimed on Revest
+E044 – You cannot withdraw more than exists in a vault
+E045 – Splitting an FNFT should result in the same or less than total amount of tokens in that vault
+E046 – Transfers are disabled for this FNFT
+E047 – Error with approval for ERC20
+E048 – Wrong lock!
+E049 – Pair has no specific oracle on the chosen oracle.
+E050 – Combo locks extracted into standalone functionality
+E051 – Reentrant calls are not allowed!
+E052 – Oracle cannot extract price data without at least two data points
+E053 – Only send ETH if asset is WETH
+E054 - Set proportions to add to 1000
+E055 - Staking must be in standardized amounts of months
+E056 – Address or Value lock is not mature and cannot be unlocked
+E057 - Only interest-bearing assets may be minted this way
+E058 – Specify lockType
+E059 – Address lock cannot be unlocked
+E060 – This method can only be called by the staking contract
+E061 – Staking FNFTs should be singular and you must own one to claim the rewards on it
+E061 - Invalid timestamps
+E062 - Invalid earlybirdBonus
+E063 - Sale is not open
+E064 - Nothing to claim
+E065 - Sale is not ended
+E066 - Token is not claimable yet
+E067 - Lengths are not equal
+E068 - Failed to send ether
+E069 – Must distribute to entire series if quantity > balance
+E070 – Must distribute to entire series if quantity > balance
+EO71 – LP address not set
+E072 – Must be basic or LP tokens

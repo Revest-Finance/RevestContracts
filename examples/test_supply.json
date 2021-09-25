@@ -1,0 +1,42 @@
+{
+    "name":"Revest Supply Lock",
+    "description":"Offers a lock that unlocks when supply rises above/below threshold",
+    "author":"RobAnon",
+    "inputs":[
+        {
+            "label":"Asset to check supply of",
+            "primitive":"token",
+            "encode":"address",
+            "index":1
+        },
+        {
+            "label":"Supply to unlock at",
+            "primitive":"number",
+            "encode":"uint256",
+            "extra_data": {
+                "decimal_precision":-1,
+                "source_precision_from_index":1
+            },
+            "index":0
+        },
+        {
+            "label":"Unlock above or below supply?",
+            "primitive":"binary_radio",
+            "encode":"bool",
+            "extra_data": { 
+                "options": [
+                    {
+                        "text": "Above",
+                        "value": "true"
+                    },
+                    {
+                        "text": "Below",
+                        "value": "false"
+                    }
+                ]
+            },
+            "index":2
+        }
+    ]
+
+}

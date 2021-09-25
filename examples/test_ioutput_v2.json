@@ -1,0 +1,39 @@
+{
+    "name":"Revest Staking System",
+    "description":"Handles staking for the Revest Protocol",
+    "front_display": [
+        {
+            "label":"RVST Rewards: ",
+            "encode":"uint256",
+            "primitive":"integer",
+            "extra_data": {
+                "decimal_precision": 18
+            },
+            "index":0
+        },
+        {
+            "label":"ETH Rewards: ",
+            "encode":"uint256",
+            "primitive":"integer",
+            "extra_data": {
+                "decimal_precision": 18
+            },
+            "index":1
+        }
+    ],
+    "info_modal": [
+        {
+            "label":"Staked asset",
+            "encode":"address",
+            "primitive":"address",
+            "index":3
+        },
+        {
+            "label":"Time period: ",
+            "units": " months",
+            "encode":"uint256",
+            "primitive":"integer",
+            "index":2
+        }
+    ]
+}

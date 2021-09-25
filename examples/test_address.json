@@ -1,0 +1,83 @@
+{
+    "name":"Revest Combo Lock",
+    "description":"Offers AND/OR combinations of a value lock and a time lock",
+    "author":"RobAnon",
+    "inputs":[
+        {
+            "label":"Unlock Date",
+            "primitive":"date",
+            "encode":"uint256",
+            "index":0
+        },
+        {
+            "label":"Asset to check price of",
+            "primitive":"token",
+            "encode":"address",
+            "index":4
+        },
+        {
+            "label":"Asset to get price in",
+            "primitive":"token",
+            "encode":"address",
+            "index":5
+        },
+        {
+            "label":"Select Oracle",
+            "primitive":"oracle",
+            "encode":"address",
+            "extra_data":{
+                "asset1_index":4,
+                "asset2_index":5
+            },
+            "index":6
+        },
+        {
+            "label":"Price to unlock at",
+            "primitive":"number",
+            "encode":"uint256",
+            "extra_data": {
+                "decimal_precision":-1,
+                "source_precision_from_index":5
+            },
+            "index":1
+        },
+        {
+            "label":"Unlock above or below price?",
+            "primitive":"binary_radio",
+            "encode":"bool",
+            "extra_data": { 
+                "options": [
+                    {
+                        "text": "Above",
+                        "value": "true"
+                    },
+                    {
+                        "text": "Below",
+                        "value": "false"
+                    }
+                ]
+            },
+            "index":2
+        },
+        {
+            "label":"Logical AND?",
+            "primitive":"binary_radio",
+            "encode":"bool",
+            "extra_data": { 
+                "options": [
+                    {
+                        "text": "AND",
+                        "value": "true"
+                    },
+                    {
+                        "text": "OR",
+                        "value": "false"
+                    }
+                ]
+            },
+            "index":3
+        }
+
+    ]
+
+}

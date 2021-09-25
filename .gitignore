@@ -1,0 +1,14 @@
+node_modules
+# package-lock.json
+# package.json
+.env
+.vscode
+.DS_Store
+build/
+artifacts/
+cache/
+snapshot.json
+bin
+hardhat/artifacts/
+hardhat/cache/
+hardhat/yarn.lock
