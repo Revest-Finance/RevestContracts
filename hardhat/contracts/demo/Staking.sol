@@ -13,6 +13,12 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import '@openzeppelin/contracts/utils/introspection/ERC165.sol';
 
+interface IOldStaking {
+    function config(uint fnftId) external view returns (uint allocPoints, uint timePeriod);
+    function manualMapConfig(uint[] memory fnftIds, uint[] memory timePeriod) external;
+    function customMetadataUrl() external view returns (string memory);
+}
+
 contract Staking is Ownable, IOutputReceiver, ERC165, IAddressLock {
     using SafeERC20 for IERC20;
 
@@ -21,41 +27,53 @@ contract Staking is Ownable, IOutputReceiver, ERC165, IAddressLock {
     address public rewardsHandlerAddress;
     address public addressRegistry;
 
+    //TODO: ADD SETTERS FOR THESE
+    address public oldStakingContract;
+    uint public previousStakingIDCutoff;
+
     uint private constant ONE_DAY = 86400;
 
     uint private constant WINDOW_ONE = ONE_DAY;
     uint private constant WINDOW_THREE = ONE_DAY*5;
     uint private constant WINDOW_SIX = ONE_DAY*9;
     uint private constant WINDOW_TWELVE = ONE_DAY*14;
+    uint private constant MAX_INT = 2**256 - 1;
 
     address internal immutable WETH;
 
     uint[4] internal interestRates = [4, 13, 27, 56];
-    string public customMetadataUrl = "https://revest.mypinata.cloud/ipfs/QmeSaVihizntuDQL5BgsujK2nK6bkkwXXzHATGGjM2uyRr";
+    string public customMetadataUrl = "https://revest.mypinata.cloud/ipfs/Qmb6ADSCJt1xQ99ACGn2SQfZgGiGNP6qvgont1gAQguaoT";
     string public addressMetadataUrl = "https://revest.mypinata.cloud/ipfs/QmY3KUBToJBthPLvN1Knd7Y51Zxx7FenFhXYV8tPEMVAP3";
 
+    event StakedRevest(uint indexed timePeriod, bool indexed isBasic, uint indexed amount, uint fnftId);
 
-    struct StakingConfig {
-        uint allocPoints;
+    struct StakingData {
         uint timePeriod;
+        uint dateLockedFrom;
     }
 
-    // fnftId -> allocPoints
-    mapping(uint => StakingConfig) internal config;
+    // fnftId -> timePeriods
+    mapping(uint => StakingData) public stakingConfigs;
 
     constructor(
         address revestAddress_,
+        address lpAddress_,
         address rewardsHandlerAddress_,
         address addressRegistry_,
         address wrappedEth_
     ) {
         revestAddress = revestAddress_;
+        lpAddress = lpAddress_;
         addressRegistry = addressRegistry_;
         rewardsHandlerAddress = rewardsHandlerAddress_;
         WETH = wrappedEth_;
+        previousStakingIDCutoff = IFNFTHandler(IAddressRegistry(addressRegistry).getRevestFNFT()).getNextId() - 1;
+
+        IERC20(lpAddress).approve(address(getRevest()), MAX_INT);
+        IERC20(revestAddress).approve(address(getRevest()), MAX_INT);
     }
 
-    function supportsInterface(bytes4 interfaceId) public view override(ERC165, IERC165) returns (bool) {
+    function supportsInterface(bytes4 interfaceId) public view override (ERC165, IERC165) returns (bool) {
         return (
             interfaceId == type(IOutputReceiver).interfaceId
             || interfaceId == type(IAddressLock).interfaceId
@@ -65,12 +83,12 @@ contract Staking is Ownable, IOutputReceiver, ERC165, IAddressLock {
 
     function stakeBasicTokens(uint amount, uint monthsMaturity) public returns (uint) {
         require(monthsMaturity == 1 || monthsMaturity == 3 || monthsMaturity == 6 || monthsMaturity == 12, 'E055');
-        IERC20(revestAddress).safeTransferFrom(msg.sender, address(this), amount * 1);
-        IERC20(revestAddress).approve(address(getRevest()), amount * 1);
+        IERC20(revestAddress).safeTransferFrom(msg.sender, address(this), amount);
 
         IRevest.FNFTConfig memory fnftConfig;
         fnftConfig.asset = revestAddress;
         fnftConfig.depositAmount = amount;
+        fnftConfig.isMulti = true;
 
         fnftConfig.pipeToContract = address(this);
 
@@ -85,25 +103,24 @@ contract Staking is Ownable, IOutputReceiver, ERC165, IAddressLock {
 
         uint interestRate = getInterestRate(monthsMaturity);
         uint allocPoint = amount * interestRate;
-        uint currentShares = IRewardsHandler(rewardsHandlerAddress).getAllocPoint(fnftId, revestAddress, true);
-        uint newAllocPoint = currentShares + allocPoint;
 
-        StakingConfig memory stakeConfig = StakingConfig(allocPoint, monthsMaturity);
-        config[fnftId] = stakeConfig;
+        StakingData memory cfg = StakingData(monthsMaturity, block.timestamp);
+        stakingConfigs[fnftId] = cfg;
 
-        IRewardsHandler(rewardsHandlerAddress).updateBasicShares(fnftId, newAllocPoint);
+        IRewardsHandler(rewardsHandlerAddress).updateBasicShares(fnftId, allocPoint);
+
+        emit StakedRevest(monthsMaturity, true, amount, fnftId);
         return fnftId;
     }
 
     function stakeLPTokens(uint amount, uint monthsMaturity) public returns (uint) {
-        require(lpAddress != address(0x0), "E071");
         require(monthsMaturity == 1 || monthsMaturity == 3 || monthsMaturity == 6 || monthsMaturity == 12, 'E055');
-        IERC20(lpAddress).safeTransferFrom(msg.sender, address(this), amount * 1);
-        IERC20(lpAddress).approve(address(getRevest()), amount * 1);
+        IERC20(lpAddress).safeTransferFrom(msg.sender, address(this), amount);
 
         IRevest.FNFTConfig memory fnftConfig;
         fnftConfig.asset = lpAddress;
         fnftConfig.depositAmount = amount;
+        fnftConfig.isMulti = true;
 
         fnftConfig.pipeToContract = address(this);
 
@@ -117,15 +134,40 @@ contract Staking is Ownable, IOutputReceiver, ERC165, IAddressLock {
 
         uint interestRate = getInterestRate(monthsMaturity);
         uint allocPoint = amount * interestRate;
-        uint currentShares = IRewardsHandler(rewardsHandlerAddress).getAllocPoint(fnftId, revestAddress, true);
-        uint newAllocPoint = currentShares + allocPoint;
 
+        StakingData memory cfg = StakingData(monthsMaturity, block.timestamp);
+        stakingConfigs[fnftId] = cfg;
 
-        StakingConfig memory stakeConfig = StakingConfig(allocPoint, monthsMaturity);
-        config[fnftId] = stakeConfig;
-
-        IRewardsHandler(rewardsHandlerAddress).updateLPShares(fnftId, newAllocPoint);
+        IRewardsHandler(rewardsHandlerAddress).updateLPShares(fnftId, allocPoint);
+        emit StakedRevest(monthsMaturity, false, amount, fnftId);
         return fnftId;
+    }
+
+    function depositAdditionalToStake(uint fnftId, uint amount) public {
+        //Prevent unauthorized access
+        require(IFNFTHandler(getRegistry().getRevestFNFT()).getBalance(_msgSender(), fnftId) == 1, 'E061');
+        require(fnftId > previousStakingIDCutoff, 'E080');
+        uint time = stakingConfigs[fnftId].timePeriod;
+        require(time > 0, 'E078');
+        address asset = ITokenVault(getRegistry().getTokenVault()).getFNFT(fnftId).asset;
+        require(asset == revestAddress || asset == lpAddress, 'E079');
+
+        //Pull tokens from caller
+        IERC20(asset).safeTransferFrom(_msgSender(), address(this), amount);
+        //Claim rewards owed
+        IRewardsHandler(rewardsHandlerAddress).claimRewards(fnftId, _msgSender());
+        //Write new, extended unlock date
+        stakingConfigs[fnftId].dateLockedFrom = block.timestamp;
+        //Retreive current allocation points – WETH and RVST implicitly have identical alloc points
+        uint oldAllocPoints = IRewardsHandler(rewardsHandlerAddress).getAllocPoint(fnftId, revestAddress, asset == revestAddress);
+        uint allocPoints = amount * getInterestRate(time) + oldAllocPoints;
+        if(asset == revestAddress) {
+            IRewardsHandler(rewardsHandlerAddress).updateBasicShares(fnftId, allocPoints);
+        } else if (asset == lpAddress) {
+            IRewardsHandler(rewardsHandlerAddress).updateLPShares(fnftId, allocPoints);
+        }
+        //Deposit additional tokens
+        getRevest().depositAdditionalToFNFT(fnftId, amount, 1);
     }
 
     function getInterestRate(uint months) public view returns (uint) {
@@ -140,22 +182,21 @@ contract Staking is Ownable, IOutputReceiver, ERC165, IAddressLock {
         }
     }
 
-    function updateInterestRates(uint[4] memory newRates) external onlyOwner {
-        interestRates = newRates;
-    }
-
     function receiveRevestOutput(
         uint fnftId,
         address asset,
         address payable owner,
         uint quantity
     ) external override {
-        require(_msgSender() == getRegistry().getTokenVault(), "E016");
-        uint totalQuantity = quantity * ITokenVault(getRegistry().getTokenVault()).getFNFT(fnftId).depositAmount;
+        address vault = getRegistry().getTokenVault();
+        require(_msgSender() == vault, "E016");
+
+        uint totalQuantity = quantity * ITokenVault(vault).getFNFT(fnftId).depositAmount;
+        IRewardsHandler(rewardsHandlerAddress).claimRewards(fnftId, owner);
         if (asset == revestAddress) {
-            unstakeBasicTokens(fnftId, owner);
+            IRewardsHandler(rewardsHandlerAddress).updateBasicShares(fnftId, 0);
         } else if (asset == lpAddress) {
-            unstakeLPTokens(fnftId, owner);
+            IRewardsHandler(rewardsHandlerAddress).updateLPShares(fnftId, 0);
         } else {
             require(false, "E072");
         }
@@ -169,32 +210,10 @@ contract Staking is Ownable, IOutputReceiver, ERC165, IAddressLock {
         IRewardsHandler(rewardsHandlerAddress).claimRewards(fnftId, _msgSender());
     }
 
-    function unstakeBasicTokens(uint fnftId, address user) internal {
-        // Receive rewards
-        IRewardsHandler(rewardsHandlerAddress).claimRewards(fnftId, user);
-
-        // Remove allocation points
-        uint allocPoint = config[fnftId].allocPoints;
-        uint currentShares = IRewardsHandler(rewardsHandlerAddress).getAllocPoint(fnftId, revestAddress, true);
-        uint newAllocPoint = currentShares - allocPoint;
-        IRewardsHandler(rewardsHandlerAddress).updateBasicShares(fnftId, newAllocPoint);
-    }
-
-    function unstakeLPTokens(uint fnftId, address user) internal {
-        IRewardsHandler(rewardsHandlerAddress).claimRewards(fnftId, user);
-
-        // Remove allocation points
-        uint allocPoint = config[fnftId].allocPoints;
-        uint currentShares = IRewardsHandler(rewardsHandlerAddress).getAllocPoint(fnftId, lpAddress, true);
-        uint newAllocPoint = currentShares - allocPoint;
-        IRewardsHandler(rewardsHandlerAddress).updateLPShares(fnftId, newAllocPoint);
-    }
-
-    function updateLock(uint fnftId, uint lockId, bytes memory arguments) external override {
+    function updateLock(uint fnftId, uint, bytes memory) external override {
         require(IFNFTHandler(getRegistry().getRevestFNFT()).getBalance(_msgSender(), fnftId) == 1, 'E061');
         // Receive rewards
         IRewardsHandler(rewardsHandlerAddress).claimRewards(fnftId, _msgSender());
-
     }
 
     function needsUpdate() external pure override returns (bool) {
@@ -206,7 +225,11 @@ contract Staking is Ownable, IOutputReceiver, ERC165, IAddressLock {
     }
 
     function getCustomMetadata(uint fnftId) external view override returns (string memory) {
-        return customMetadataUrl;
+        if(fnftId <= previousStakingIDCutoff) {
+            return IOldStaking(oldStakingContract).customMetadataUrl();
+        } else {
+            return customMetadataUrl;
+        }
     }
 
     function getOutputDisplayValues(uint fnftId) external view override returns (bytes memory) {
@@ -219,7 +242,13 @@ contract Staking is Ownable, IOutputReceiver, ERC165, IAddressLock {
         }
         uint revestRewards = IRewardsHandler(rewardsHandlerAddress).getRewards(fnftId, revestAddress);
         uint wethRewards = IRewardsHandler(rewardsHandlerAddress).getRewards(fnftId, WETH);
-        return abi.encode(revestRewards, wethRewards, config[fnftId].timePeriod, isRevestToken ? revestAddress : lpAddress);
+        uint timePeriod = stakingConfigs[fnftId].timePeriod;
+        if(fnftId <= previousStakingIDCutoff) {
+            (,timePeriod) = IOldStaking(oldStakingContract).config(fnftId);
+            return abi.encode(revestRewards, wethRewards, timePeriod, isRevestToken ? revestAddress : lpAddress);
+        }
+        //This parameter has been modified for new stakes
+        return abi.encode(revestRewards, wethRewards, timePeriod, stakingConfigs[fnftId].dateLockedFrom, isRevestToken ? revestAddress : lpAddress, stakingConfigs[fnftId].dateLockedFrom);
     }
 
     function setLPAddress(address lpAddress_) external onlyOwner {
@@ -256,44 +285,87 @@ contract Staking is Ownable, IOutputReceiver, ERC165, IAddressLock {
         addressMetadataUrl = _addressMetadataUrl;
     }
 
+    function setRewardsHandler(address _handler) external onlyOwner {
+        rewardsHandlerAddress = _handler;
+    }
+
     function getMetadata() external view override returns (string memory) {
         return addressMetadataUrl;
     }
 
-    function getDisplayValues(uint fnftId, uint lockId) external view override returns (bytes memory) {
-        StakingConfig memory lockDetails = config[fnftId];
-        return abi.encode(lockDetails.allocPoints, lockDetails.timePeriod);
+    function getDisplayValues(uint fnftId, uint) external view override returns (bytes memory) {
+        uint allocPoints;
+        {
+            uint revestTokenAlloc = IRewardsHandler(rewardsHandlerAddress).getAllocPoint(fnftId, revestAddress, true);
+            uint lpTokenAlloc = IRewardsHandler(rewardsHandlerAddress).getAllocPoint(fnftId, revestAddress, false);
+            allocPoints = revestTokenAlloc > 0 ? revestTokenAlloc : lpTokenAlloc;
+        }
+        uint timePeriod = stakingConfigs[fnftId].timePeriod;
+        if(fnftId <= previousStakingIDCutoff) {
+            (allocPoints, timePeriod) = IOldStaking(oldStakingContract).config(fnftId);
+        }
+        return abi.encode(allocPoints, timePeriod);
     }
 
-    function createLock(uint fnftId, uint lockID, bytes memory arguments) external pure override {
+    function createLock(uint, uint, bytes memory) external pure override {
         return;
     }
 
-    function isUnlockable(uint fnftId, uint lockId) external view override returns (bool) {
-        uint window = getWindow(config[fnftId].timePeriod);
-        uint depositTime = ILockManager(getRegistry().getLockManager()).fnftIdToLock(fnftId).creationTime;
+    function isUnlockable(uint fnftId, uint) external view override returns (bool) {
+        uint timePeriod = stakingConfigs[fnftId].timePeriod;
+        uint depositTime;
+        if(fnftId <= previousStakingIDCutoff) {
+            (, timePeriod) = IOldStaking(oldStakingContract).config(fnftId);
+            depositTime =  ILockManager(getRegistry().getLockManager()).fnftIdToLock(fnftId).creationTime;
+        } else {
+            depositTime = stakingConfigs[fnftId].dateLockedFrom;
+        }
+        uint window = getWindow(timePeriod);
         bool mature = block.timestamp - depositTime > window;
-        bool window_open = (block.timestamp - depositTime) % (config[fnftId].timePeriod * 30 * ONE_DAY) < window;
+        bool window_open = (block.timestamp - depositTime) % (timePeriod * 30 * ONE_DAY) < window;
         return mature && window_open;
     }
 
-
-    function getWindow(uint timePeriod) private pure returns (uint) {
+    function getWindow(uint timePeriod) private pure returns (uint window) {
         if(timePeriod == 1) {
-            return WINDOW_ONE;
+            window = WINDOW_ONE;
         }
         if(timePeriod == 3) {
-            return WINDOW_THREE;
+            window = WINDOW_THREE;
         }
         if(timePeriod == 6) {
-            return WINDOW_SIX;
+            window = WINDOW_SIX;
         }
         if(timePeriod == 12) {
-            return WINDOW_TWELVE;
+            window = WINDOW_TWELVE;
         }
-        // If none of these are true, bad call
-        require(false, "Invalid time window");
     }
+
+    // Admin functions
+
+    function manualMapConfig(
+        uint[] memory fnftIds,
+        uint[] memory timePeriod,
+        uint [] memory lockedFrom
+    ) external onlyOwner {
+        for(uint i = 0; i < fnftIds.length; i++) {
+            stakingConfigs[fnftIds[i]].timePeriod = timePeriod[i];
+            stakingConfigs[fnftIds[i]].dateLockedFrom = lockedFrom[i];
+        }
+    }
+
+    function updateInterestRates(uint[4] memory newRates) external onlyOwner {
+        interestRates = newRates;
+    }
+
+    function setCutoff(uint cutoff) external onlyOwner {
+        previousStakingIDCutoff = cutoff;
+    }
+
+    function setOldStaking(address stake) external onlyOwner {
+        oldStakingContract = stake;
+    }
+
 
 
 }
