@@ -52,7 +52,7 @@ contract UniswapTwapOracleDispatch is IOracleDispatch, RevestAccessControl {
             return false;
         }
         TwapLock memory twap;
-        twap.timestampLatest = block.timestamp;
+        (, , twap.timestampLatest) = IUniswapV2Pair(pair).getReserves();
         twap.lastUpdateCumulativePrice = inverted ?  IUniswapV2Pair(pair).price1CumulativeLast() : IUniswapV2Pair(pair).price0CumulativeLast();
         twap.pairAddress = pair;
         twaps[getOracleID(asset, compareTo)] = twap;

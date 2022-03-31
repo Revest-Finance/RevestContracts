@@ -39,21 +39,20 @@ contract FNFTHandler is ERC1155, AccessControl, RevestAccessControl, IFNFTHandle
 
     function mint(address account, uint id, uint amount, bytes memory data) external override onlyRevestController {
         supply[id] += amount;
-        _mint(account, id, amount, data);
         fnftsCreated += 1;
+        _mint(account, id, amount, data);
+        
     }
 
     function mintBatchRec(address[] calldata recipients, uint[] calldata quantities, uint id, uint newSupply, bytes memory data) external override onlyRevestController {
         supply[id] += newSupply;
+        fnftsCreated += 1;
         for(uint i = 0; i < quantities.length; i++) {
             _mint(recipients[i], id, quantities[i], data);
         }
-        fnftsCreated += 1;
     }
 
-    function mintBatch(address to, uint[] memory ids, uint[] memory amounts, bytes memory data) external override onlyRevestController {
-        _mintBatch(to, ids, amounts, data);
-    }
+    function mintBatch(address to, uint[] memory ids, uint[] memory amounts, bytes memory data) external override onlyRevestController {}
 
     function setURI(string memory newuri) external override onlyRevestController {
         _setURI(newuri);

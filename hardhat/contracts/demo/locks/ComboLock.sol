@@ -2,24 +2,24 @@
 
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "../interfaces/IAddressLock.sol";
-import "../interfaces/IAddressRegistry.sol";
-import "../interfaces/IRevest.sol";
-import "../interfaces/ITokenVault.sol";
-import "../interfaces/IOracleDispatch.sol";
+import "../../interfaces/IAddressRegistry.sol";
+import "../../interfaces/IRevest.sol";
+import "../../interfaces/ITokenVault.sol";
+import "../../interfaces/IOracleDispatch.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import '@openzeppelin/contracts/utils/introspection/ERC165.sol';
+import "../../utils/SecuredAddressLock.sol";
 
 /**
  * @title
  * @dev
  */
-contract BinaryComboLock is Ownable, IAddressLock, ERC165  {
+contract BinaryComboLock is SecuredAddressLock, ERC165  {
 
     string public metadataURI = "https://revest.mypinata.cloud/ipfs/QmQMVXytJCebqKVbo4iMyU4gRuG5pUAdCKgf5UbZf51tAc";
-    address private registryAddress;
+
+    constructor(address registry) SecuredAddressLock(registry) {}
 
     mapping (uint => ComboLock) private locks;
 
@@ -37,10 +37,11 @@ contract BinaryComboLock is Ownable, IAddressLock, ERC165  {
 
     function supportsInterface(bytes4 interfaceId) public view override(ERC165, IERC165) returns (bool) {
         return interfaceId == type(IAddressLock).interfaceId
+            || interfaceId == type(IRegistryProvider).interfaceId
             || super.supportsInterface(interfaceId);
     }
 
-    function isUnlockable(uint fnftId, uint lockId) public view override returns (bool) {
+    function isUnlockable(uint , uint lockId) public view override returns (bool) {
         ComboLock memory lock = locks[lockId];
         if(lock.isAnd) {
             return block.timestamp > lock.endTime && getLockMaturity(lockId);
@@ -53,7 +54,7 @@ contract BinaryComboLock is Ownable, IAddressLock, ERC165  {
 
     // Create the lock within that contract DURING minting
     // Likely will be best-practices to call this AFTER minting, once we know that fnftId is set
-    function createLock(uint fnftId, uint lockId, bytes memory arguments) external override {
+    function createLock(uint, uint lockId, bytes memory arguments) external override onlyRevestController {
         uint endTime;
         uint unlockValue;
         bool unlockRisingEdge;
@@ -76,7 +77,7 @@ contract BinaryComboLock is Ownable, IAddressLock, ERC165  {
 
     }
 
-    function updateLock(uint fnftId, uint lockId, bytes memory arguments) external override {
+    function updateLock(uint, uint lockId, bytes memory ) external override {
         // For a combo lock, there are no arguments
         IOracleDispatch oracle = IOracleDispatch(locks[lockId].oracle);
         oracle.updateOracle(locks[lockId].asset1, locks[lockId].asset2);
@@ -86,7 +87,7 @@ contract BinaryComboLock is Ownable, IAddressLock, ERC165  {
         return true;
     }
 
-    function getDisplayValues(uint fnftId, uint lockId) external view override returns (bytes memory) {
+    function getDisplayValues(uint, uint lockId) external view override returns (bytes memory) {
         ComboLock memory lockDetails = locks[lockId];
         IOracleDispatch oracle = IOracleDispatch(locks[lockId].oracle);
         bool needsUpdateNow = oracle.oracleNeedsUpdates(lockDetails.asset1, lockDetails.asset2);
@@ -100,22 +101,6 @@ contract BinaryComboLock is Ownable, IAddressLock, ERC165  {
             }
         }
         return abi.encode(lockDetails.endTime, lockDetails.unlockValue, lockDetails.unlockRisingEdge, lockDetails.isAnd, lockDetails.asset1, lockDetails.asset2, lockDetails.oracle, needsUpdateNow);
-    }
-
-    function setAddressRegistry(address _revest) external override onlyOwner {
-        registryAddress = _revest;
-    }
-
-    function getAddressRegistry() external view override returns (address) {
-        return registryAddress;
-    }
-
-    function getRevest() private view returns (IRevest) {
-        return IRevest(getRegistry().getRevest());
-    }
-
-    function getRegistry() public view returns (IAddressRegistry) {
-        return IAddressRegistry(registryAddress);
     }
 
     function setMetadata(string memory _metadataURI) external onlyOwner {

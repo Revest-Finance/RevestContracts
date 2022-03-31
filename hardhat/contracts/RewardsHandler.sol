@@ -15,7 +15,6 @@ contract RewardsHandler is RevestAccessControl, IRewardsHandler {
     address internal immutable WETH;
     address internal immutable RVST;
     address public STAKING;
-
     uint public constant PRECISION = 10**27;
 
     uint public erc20Fee; // out of 1000
@@ -23,7 +22,7 @@ contract RewardsHandler is RevestAccessControl, IRewardsHandler {
 
     /**
      allocPoints is the same for all reward tokens (WETH vs RVST)
-     lastMul is the same for all staking types (LP vs basic)
+     lastMul is different for staking types (LP vs basic)
      */
 
     mapping(uint => UserBalance) public wethBasicBalances;
@@ -31,11 +30,12 @@ contract RewardsHandler is RevestAccessControl, IRewardsHandler {
     mapping(uint => UserBalance) public rvstBasicBalances;
     mapping(uint => UserBalance) public rvstLPBalances;
 
-
-    uint public wethGlobalMul = PRECISION;
-    uint public rvstGlobalMul = PRECISION;
-    uint public totalLPAllocPoint = 0; // Total allocation points. Must be the sum of all allocation points.
-    uint public totalBasicAllocPoint = 0;
+    uint public wethBasicGlobalMul = PRECISION;
+    uint public wethLPGlobalMul = PRECISION;
+    uint public rvstBasicGlobalMul = PRECISION;
+    uint public rvstLPGlobalMul = PRECISION;
+    uint public totalLPAllocPoint = 1; // Total allocation points. Must be the sum of all allocation points. We start at 1 to avoid divide-by-zero
+    uint public totalBasicAllocPoint = 1;
 
     constructor(address provider, address weth, address rvst) RevestAccessControl(provider) {
         WETH = weth;
@@ -51,9 +51,9 @@ contract RewardsHandler is RevestAccessControl, IRewardsHandler {
         totalLPAllocPoint = totalLPAllocPoint + newAllocPoint - wethLPBalances[fnftId].allocPoint;
 
         wethLPBalances[fnftId].allocPoint = newAllocPoint;
-        wethLPBalances[fnftId].lastMul = wethGlobalMul;
+        wethLPBalances[fnftId].lastMul = wethLPGlobalMul;
         rvstLPBalances[fnftId].allocPoint = newAllocPoint;
-        rvstLPBalances[fnftId].lastMul = rvstGlobalMul;
+        rvstLPBalances[fnftId].lastMul = rvstLPGlobalMul;
     }
 
     function updateBasicShares(uint fnftId, uint newAllocPoint) external override onlyStakingContract {
@@ -61,9 +61,9 @@ contract RewardsHandler is RevestAccessControl, IRewardsHandler {
         totalBasicAllocPoint = totalBasicAllocPoint + newAllocPoint - wethBasicBalances[fnftId].allocPoint;
 
         wethBasicBalances[fnftId].allocPoint = newAllocPoint;
-        wethBasicBalances[fnftId].lastMul = wethGlobalMul;
+        wethBasicBalances[fnftId].lastMul = wethBasicGlobalMul;
         rvstBasicBalances[fnftId].allocPoint = newAllocPoint;
-        rvstBasicBalances[fnftId].lastMul = rvstGlobalMul;
+        rvstBasicBalances[fnftId].lastMul = rvstBasicGlobalMul;
     }
 
     /**
@@ -87,8 +87,8 @@ contract RewardsHandler is RevestAccessControl, IRewardsHandler {
     function claimRewardsForToken(uint fnftId, address token, address user) internal returns (bool) {
         (UserBalance storage lpBalance, UserBalance storage basicBalance) = getBalances(fnftId, token);
         uint amount = rewardsOwed(token, lpBalance, basicBalance);
-        lpBalance.lastMul = getGlobalMul(token);
-        basicBalance.lastMul = getGlobalMul(token);
+        lpBalance.lastMul = getLPGlobalMul(token);
+        basicBalance.lastMul = getBasicGlobalMul(token);
 
         IERC20(token).safeTransfer(user, amount);
         return amount > 0;
@@ -110,8 +110,10 @@ contract RewardsHandler is RevestAccessControl, IRewardsHandler {
         require(token == WETH || token == RVST, "Only WETH and RVST supported");
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
         if(totalLPAllocPoint + totalBasicAllocPoint > 0) {
-            uint globalMulInc = (amount * PRECISION) / (totalLPAllocPoint + totalBasicAllocPoint);
-            setGlobalMul(token, getGlobalMul(token) + globalMulInc);
+            uint basicMulInc = (amount * PRECISION / 2) / totalBasicAllocPoint;
+            uint lpMulInc = (amount * PRECISION / 2) / totalLPAllocPoint;
+            setBasicGlobalMul(token, getBasicGlobalMul(token) + basicMulInc);
+            setLPGlobalMul(token, getLPGlobalMul(token) + lpMulInc);
         }
     }
 
@@ -134,8 +136,8 @@ contract RewardsHandler is RevestAccessControl, IRewardsHandler {
      */
     function rewardsOwed(address token, UserBalance memory lpBalance, UserBalance memory basicBalance) internal view returns (uint) {
         uint globalBalance = IERC20(token).balanceOf(address(this));
-        uint lpRewards = (getGlobalMul(token) - lpBalance.lastMul) * lpBalance.allocPoint;
-        uint basicRewards = (getGlobalMul(token) - basicBalance.lastMul) * basicBalance.allocPoint;
+        uint lpRewards = (getLPGlobalMul(token) - lpBalance.lastMul) * lpBalance.allocPoint;
+        uint basicRewards = (getBasicGlobalMul(token) - basicBalance.lastMul) * basicBalance.allocPoint;
         uint tokenAmount = (lpRewards + basicRewards) / PRECISION;
         return tokenAmount;
     }
@@ -144,15 +146,84 @@ contract RewardsHandler is RevestAccessControl, IRewardsHandler {
         return token == WETH ? (wethLPBalances[fnftId], wethBasicBalances[fnftId]) : (rvstLPBalances[fnftId], rvstBasicBalances[fnftId]);
     }
 
-    function getGlobalMul(address token) internal view returns (uint) {
-        return token == WETH ? wethGlobalMul : rvstGlobalMul;
+    function getLPGlobalMul(address token) internal view returns (uint) {
+        return token == WETH ? wethLPGlobalMul : rvstLPGlobalMul;
     }
 
-    function setGlobalMul(address token, uint newMul) internal {
+    function setLPGlobalMul(address token, uint newMul) internal {
         if (token == WETH) {
-            wethGlobalMul = newMul;
+            wethLPGlobalMul = newMul;
         } else {
-            rvstGlobalMul = newMul;
+            rvstLPGlobalMul = newMul;
+        }
+    }
+
+    function getBasicGlobalMul(address token) internal view returns (uint) {
+        return token == WETH ? wethBasicGlobalMul : rvstBasicGlobalMul;
+    }
+
+    function setBasicGlobalMul(address token, uint newMul) internal {
+        if (token == WETH) {
+            wethBasicGlobalMul = newMul;
+        } else {
+            rvstBasicGlobalMul = newMul;
+        }
+    }
+
+    // Admin functions for migration
+    // To be fully abandoned in future via contract-based owner
+    // Apart from setStakingContract
+
+    function manualMapRVSTBasic(
+        uint[] memory fnfts,
+        uint[] memory allocPoints
+    ) external onlyOwner {
+        for(uint i = 0; i < fnfts.length; i++) {
+            UserBalance storage userBal = rvstBasicBalances[fnfts[i]];
+            userBal.allocPoint = allocPoints[i];
+            userBal.lastMul = rvstBasicGlobalMul;
+        }
+    }
+
+    function manualMapRVSTLP(
+        uint[] memory fnfts,
+        uint[] memory allocPoints
+    ) external onlyOwner {
+        for(uint i = 0; i < fnfts.length; i++) {
+            UserBalance storage userBal = rvstLPBalances[fnfts[i]];
+            userBal.allocPoint = allocPoints[i];
+            userBal.lastMul = rvstLPGlobalMul;
+        }
+    }
+
+    function manualMapWethBasic(
+        uint[] memory fnfts,
+        uint[] memory allocPoints
+    ) external onlyOwner {
+        for(uint i = 0; i < fnfts.length; i++) {
+            UserBalance storage userBal = wethBasicBalances[fnfts[i]];
+            userBal.allocPoint = allocPoints[i];
+            userBal.lastMul = wethBasicGlobalMul;
+        }
+    }
+
+    function manualMapWethLP(
+        uint[] memory fnfts,
+        uint[] memory allocPoints
+    ) external onlyOwner {
+        for(uint i = 0; i < fnfts.length; i++) {
+            UserBalance storage userBal = wethLPBalances[fnfts[i]];
+            userBal.allocPoint = allocPoints[i];
+            userBal.lastMul = wethLPGlobalMul;
+        }
+    }
+
+    function manualSetAllocPoints(uint _totalBasic, uint _totalLP) external onlyOwner {
+        if (_totalBasic > 0) {
+            totalBasicAllocPoint = _totalBasic;
+        }
+        if (_totalLP > 0) {
+            totalLPAllocPoint = _totalLP;
         }
     }
 
@@ -161,6 +232,5 @@ contract RewardsHandler is RevestAccessControl, IRewardsHandler {
         require(_msgSender() == STAKING, "E060");
         _;
     }
-
 
 }

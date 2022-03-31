@@ -2,18 +2,16 @@
 
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "../interfaces/IAddressLock.sol";
-import "../interfaces/IAddressRegistry.sol";
-import "../interfaces/IRevest.sol";
-import "../interfaces/ITokenVault.sol";
+import "../../interfaces/IAddressRegistry.sol";
+import "../../interfaces/IRevest.sol";
+import "../../interfaces/ITokenVault.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import '@openzeppelin/contracts/utils/introspection/ERC165.sol';
+import "../../utils/SecuredAddressLock.sol";
 
-contract SupplyLock is Ownable, IAddressLock, ERC165  {
+contract SupplyLock is SecuredAddressLock, ERC165  {
 
-    address private registryAddress;
     mapping(uint => SupplyLockDetails) private locks;
 
     struct SupplyLockDetails {
@@ -24,12 +22,15 @@ contract SupplyLock is Ownable, IAddressLock, ERC165  {
 
     using SafeERC20 for IERC20;
 
+    constructor(address registry) SecuredAddressLock(registry) {}
+
     function supportsInterface(bytes4 interfaceId) public view override(ERC165, IERC165) returns (bool) {
         return interfaceId == type(IAddressLock).interfaceId
+            || interfaceId == type(IRegistryProvider).interfaceId
             || super.supportsInterface(interfaceId);
     }
 
-    function isUnlockable(uint fnftId, uint lockId) public view override returns (bool) {
+    function isUnlockable(uint, uint lockId) public view override returns (bool) {
         address asset = locks[lockId].asset;
         uint supply = locks[lockId].supplyLevels;
         if (locks[lockId].isLockRisingEdge) {
@@ -39,7 +40,7 @@ contract SupplyLock is Ownable, IAddressLock, ERC165  {
         }
     }
 
-    function createLock(uint fnftId, uint lockId, bytes memory arguments) external override {
+    function createLock(uint , uint lockId, bytes memory arguments) external override onlyRevestController {
         uint supply;
         bool isRisingEdge;
         address asset;
@@ -55,27 +56,11 @@ contract SupplyLock is Ownable, IAddressLock, ERC165  {
         return false;
     }
 
-    function setAddressRegistry(address _revest) external override onlyOwner {
-        registryAddress = _revest;
-    }
-
-    function getAddressRegistry() external view override returns (address) {
-        return registryAddress;
-    }
-
-    function getRevest() private view returns (IRevest) {
-        return IRevest(getRegistry().getRevest());
-    }
-
-    function getRegistry() public view returns (IAddressRegistry) {
-        return IAddressRegistry(registryAddress);
-    }
-
     function getMetadata() external pure override returns (string memory) {
         return "https://revest.mypinata.cloud/ipfs/QmWQWvdpn4ovFEZxYXEqtcGdCCmpwf2FCwDUdh198Fb62g";
     }
 
-    function getDisplayValues(uint fnftId, uint lockId) external view override returns (bytes memory) {
+    function getDisplayValues(uint, uint lockId) external view override returns (bytes memory) {
         SupplyLockDetails memory lockDetails = locks[lockId];
         return abi.encode(lockDetails.supplyLevels, lockDetails.asset, lockDetails.isLockRisingEdge);
     }

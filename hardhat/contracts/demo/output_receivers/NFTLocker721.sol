@@ -3,12 +3,12 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "../interfaces/IOutputReceiverV2.sol";
-import "../interfaces/ITokenVault.sol";
-import "../interfaces/IRevest.sol";
-import "../interfaces/IFeeReporter.sol";
-import "../interfaces/IFNFTHandler.sol";
-import "../interfaces/ILockManager.sol";
+import "../../interfaces/IOutputReceiverV2.sol";
+import "../../interfaces/ITokenVault.sol";
+import "../../interfaces/IRevest.sol";
+import "../../interfaces/IFeeReporter.sol";
+import "../../interfaces/IFNFTHandler.sol";
+import "../../interfaces/ILockManager.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import '@openzeppelin/contracts/utils/introspection/ERC165.sol';
 import "@openzeppelin/contracts/token/ERC721/utils/ERC721Holder.sol";
