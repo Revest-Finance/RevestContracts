@@ -7,7 +7,6 @@ import '@openzeppelin/contracts/utils/introspection/ERC165Checker.sol';
 import "./interfaces/IRevest.sol";
 import "./interfaces/IAddressRegistry.sol";
 import "./interfaces/ILockManager.sol";
-import "./interfaces/IInterestHandler.sol";
 import "./interfaces/ITokenVault.sol";
 import "./interfaces/IRewardsHandler.sol";
 import "./interfaces/IOutputReceiver.sol";
@@ -276,7 +275,7 @@ contract RevestA3_1 is IRevest, RevestAccessControl, RevestReentrancyGuard {
             ITokenVault(vault).mapFNFTToToken(fnftId, config);
         }
 
-        getTokenVault().withdrawToken(fnftId, quantity, _msgSender());
+        ITokenVault(vault).withdrawToken(fnftId, quantity, _msgSender());
         emit FNFTWithdrawn(_msgSender(), fnftId, quantity);
     }
 

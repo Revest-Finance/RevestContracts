@@ -32,6 +32,8 @@ contract Staking is Ownable, IOutputReceiverV3, ERC165, IAddressLock {
     address public oldStakingContract;
     uint public previousStakingIDCutoff;
 
+    bool public additionalEnabled;
+
     uint private constant ONE_DAY = 86400;
 
     uint private constant WINDOW_ONE = ONE_DAY;
@@ -92,77 +94,11 @@ contract Staking is Ownable, IOutputReceiverV3, ERC165, IAddressLock {
     }
 
     function stakeBasicTokens(uint amount, uint monthsMaturity) public returns (uint) {
-        require(monthsMaturity == 1 || monthsMaturity == 3 || monthsMaturity == 6 || monthsMaturity == 12, 'E055');
-        IERC20(revestAddress).safeTransferFrom(msg.sender, address(this), amount);
-
-        IRevest.FNFTConfig memory fnftConfig;
-        fnftConfig.asset = revestAddress;
-        fnftConfig.depositAmount = amount;
-        fnftConfig.isMulti = true;
-
-        fnftConfig.pipeToContract = address(this);
-
-        address[] memory recipients = new address[](1);
-        recipients[0] = _msgSender();
-
-        uint[] memory quantities = new uint[](1);
-        // FNFT quantity will always be singular
-        quantities[0] = 1;
-
-        address revest = getRegistry().getRevest();
-        if(!approvedContracts[revest][revestAddress]){
-            IERC20(revestAddress).approve(revest, MAX_INT);
-            approvedContracts[revest][revestAddress] = true;
-        }
-        uint fnftId = IRevest(revest).mintAddressLock(address(this), '', recipients, quantities, fnftConfig);
-
-        uint interestRate = getInterestRate(monthsMaturity);
-        uint allocPoint = amount * interestRate;
-
-        StakingData memory cfg = StakingData(monthsMaturity, block.timestamp);
-        stakingConfigs[fnftId] = cfg;
-
-        IRewardsHandler(rewardsHandlerAddress).updateBasicShares(fnftId, allocPoint);
-
-        emit StakedRevest(monthsMaturity, true, amount, fnftId);
-        emit DepositERC20OutputReceiver(_msgSender(), revestAddress, amount, fnftId, '');
-        return fnftId;
+        return _stake(revestAddress, amount, monthsMaturity);
     }
 
     function stakeLPTokens(uint amount, uint monthsMaturity) public returns (uint) {
-        require(monthsMaturity == 1 || monthsMaturity == 3 || monthsMaturity == 6 || monthsMaturity == 12, 'E055');
-        IERC20(lpAddress).safeTransferFrom(msg.sender, address(this), amount);
-
-        IRevest.FNFTConfig memory fnftConfig;
-        fnftConfig.asset = lpAddress;
-        fnftConfig.depositAmount = amount;
-        fnftConfig.isMulti = true;
-
-        fnftConfig.pipeToContract = address(this);
-
-        address[] memory recipients = new address[](1);
-        recipients[0] = _msgSender();
-
-        uint[] memory quantities = new uint[](1);
-        quantities[0] = 1;
-
-        address revest = getRegistry().getRevest();
-        if(!approvedContracts[revest][lpAddress]){
-            IERC20(lpAddress).approve(revest, MAX_INT);
-            approvedContracts[revest][lpAddress] = true;
-        }
-        uint fnftId = IRevest(revest).mintAddressLock(address(this), '', recipients, quantities, fnftConfig);
-
-        uint interestRate = getInterestRate(monthsMaturity);
-        uint allocPoint = amount * interestRate;
-
-        StakingData memory cfg = StakingData(monthsMaturity, block.timestamp);
-        stakingConfigs[fnftId] = cfg;
-
-        IRewardsHandler(rewardsHandlerAddress).updateLPShares(fnftId, allocPoint);
-        emit StakedRevest(monthsMaturity, false, amount, fnftId);
-        emit DepositERC20OutputReceiver(_msgSender(), lpAddress, amount, fnftId, '');
-        return fnftId;
+        return _stake(lpAddress, amount, monthsMaturity);
     }
 
     function claimRewards(uint fnftId) external {
@@ -222,6 +158,7 @@ contract Staking is Ownable, IOutputReceiverV3, ERC165, IAddressLock {
         address vault = getRegistry().getTokenVault();
         require(_msgSender() == vault, "E016");
         require(quantity == 1);
+        require(additionalEnabled, 'Not allowed!');
         _depositAdditionalToStake(fnftId, amountToDeposit, caller);
     }
 
@@ -248,6 +185,44 @@ contract Staking is Ownable, IOutputReceiverV3, ERC165, IAddressLock {
     // This function should only ever be called when a split or additional deposit has occurred 
     function handleFNFTRemaps(uint, uint[] memory, address, bool) external pure override {
         revert();
+    }
+
+
+    function _stake(address stakeToken, uint amount, uint monthsMaturity) private returns (uint){
+        require (stakeToken == lpAddress || stakeToken == revestAddress, "Not valid stake token");
+        require(monthsMaturity == 1 || monthsMaturity == 3 || monthsMaturity == 6 || monthsMaturity == 12, 'E055');
+        IERC20(stakeToken).safeTransferFrom(msg.sender, address(this), amount);
+
+        IRevest.FNFTConfig memory fnftConfig;
+        fnftConfig.asset = stakeToken;
+        fnftConfig.depositAmount = amount;
+        fnftConfig.isMulti = true;
+
+        fnftConfig.pipeToContract = address(this);
+
+        address[] memory recipients = new address[](1);
+        recipients[0] = _msgSender();
+
+        uint[] memory quantities = new uint[](1);
+        quantities[0] = 1;
+
+        address revest = getRegistry().getRevest();
+        if(!approvedContracts[revest][stakeToken]){
+            IERC20(stakeToken).approve(revest, MAX_INT);
+            approvedContracts[revest][stakeToken] = true;
+        }
+        uint fnftId = IRevest(revest).mintAddressLock(address(this), '', recipients, quantities, fnftConfig);
+
+        uint interestRate = getInterestRate(monthsMaturity);
+        uint allocPoint = amount * interestRate;
+
+        StakingData memory cfg = StakingData(monthsMaturity, block.timestamp);
+        stakingConfigs[fnftId] = cfg;
+
+        IRewardsHandler(rewardsHandlerAddress).updateLPShares(fnftId, allocPoint);
+        emit StakedRevest(monthsMaturity, false, amount, fnftId);
+        emit DepositERC20OutputReceiver(_msgSender(), stakeToken, amount, fnftId, '');
+        return fnftId;
     }
 
     function _depositAdditionalToStake(uint fnftId, uint amount, address caller) private {
@@ -434,6 +409,10 @@ contract Staking is Ownable, IOutputReceiverV3, ERC165, IAddressLock {
 
     function setOldStaking(address stake) external onlyOwner {
         oldStakingContract = stake;
+    }
+
+    function setAdditionalDepositsEnabled(bool enabled) external onlyOwner {
+        additionalEnabled = enabled;
     }
 
 }
