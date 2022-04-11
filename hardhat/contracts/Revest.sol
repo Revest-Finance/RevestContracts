@@ -21,7 +21,7 @@ import "./lib/IWETH.sol";
  * This is the entrypoint for the frontend, as well as third-party Revest integrations.
  * Solidity style guide ordering: receive, fallback, external, public, internal, private - within a grouping, view and pure go last - https://docs.soliditylang.org/en/latest/style-guide.html
  */
-contract RevestA3_1 is IRevest, RevestAccessControl, RevestReentrancyGuard {
+contract RevestA3_2 is IRevest, RevestAccessControl, RevestReentrancyGuard {
     using SafeERC20 for IERC20;
     using ERC165Checker for address;
 
@@ -40,15 +40,21 @@ contract RevestA3_1 is IRevest, RevestAccessControl, RevestReentrancyGuard {
 
     mapping(address => bool) public whitelisted;
 
-    address private constant oldStake = 0xbCbB435cf6f664CAA5222c3Ee01d1A377F12C428;
-    address private immutable newStake;
+    mapping(address => address) public migrations;
 
     /**
      * @dev Primary constructor to create the Revest controller contract
      */
-    constructor(address provider, address weth, address _newStake) RevestAccessControl(provider) {
+    constructor(
+        address provider, 
+        address weth, 
+        address[] memory oldOutputs, 
+        address[] memory newOutputs
+    ) RevestAccessControl(provider) {
         WETH = weth;
-        newStake = _newStake;
+        for(uint i = 0; i < oldOutputs.length; i++) {
+            migrations[oldOutputs[i]] = newOutputs[i];
+        }
     }
 
     // PUBLIC FUNCTIONS
@@ -268,10 +274,10 @@ contract RevestA3_1 is IRevest, RevestAccessControl, RevestReentrancyGuard {
         
         address vault = addressesProvider.getTokenVault();
 
-        // This code snippet auto-patches the old staking contract to the new staking contract
+        // This code snippet auto-patches old staking contracts to the new staking contract
         IRevest.FNFTConfig memory config = ITokenVault(vault).getFNFT(fnftId);
-        if(config.pipeToContract == oldStake) {
-            config.pipeToContract = newStake;
+        if(migrations[config.pipeToContract] != address(0)) {
+            config.pipeToContract = migrations[config.pipeToContract];
             ITokenVault(vault).mapFNFTToToken(fnftId, config);
         }
 

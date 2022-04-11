@@ -15,12 +15,6 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import '@openzeppelin/contracts/utils/introspection/ERC165.sol';
 
-interface IOldStaking {
-    function config(uint fnftId) external view returns (uint allocPoints, uint timePeriod);
-    function manualMapConfig(uint[] memory fnftIds, uint[] memory timePeriod) external;
-    function customMetadataUrl() external view returns (string memory);
-}
-
 contract Staking is Ownable, IOutputReceiverV3, ERC165, IAddressLock {
     using SafeERC20 for IERC20;
 
@@ -48,14 +42,15 @@ contract Staking is Ownable, IOutputReceiverV3, ERC165, IAddressLock {
     address internal immutable WETH;
 
     uint[4] internal interestRates = [4, 13, 27, 56];
-    string public customMetadataUrl = "https://revest.mypinata.cloud/ipfs/QmZi1XRc5q7ngdVhCxqcjuo9F16CfhUQAWfhzN1E9BroDr";
-    string public addressMetadataUrl = "https://revest.mypinata.cloud/ipfs/QmY3KUBToJBthPLvN1Knd7Y51Zxx7FenFhXYV8tPEMVAP3";
+    string public customMetadataUrl = "https://revest.mypinata.cloud/ipfs/QmdaJso83dhA5My9gz3ewXBxoWveo95utJJqY99ZSGEpRc";
+    string public addressMetadataUrl = "https://revest.mypinata.cloud/ipfs/QmWUyvkGFtFRXWxneojvAfBMy8QpewSvwQMQAkAUV42A91";
 
     event StakedRevest(uint indexed timePeriod, bool indexed isBasic, uint indexed amount, uint fnftId);
 
     struct StakingData {
         uint timePeriod;
         uint dateLockedFrom;
+        uint amount;
     }
 
     // fnftId -> timePeriods
@@ -74,7 +69,6 @@ contract Staking is Ownable, IOutputReceiverV3, ERC165, IAddressLock {
         rewardsHandlerAddress = rewardsHandlerAddress_;
         WETH = wrappedEth_;
         previousStakingIDCutoff = IFNFTHandler(IAddressRegistry(addressRegistry).getRevestFNFT()).getNextId() - 1;
-
 
         address revest = address(getRevest());
         IERC20(lpAddress).approve(revest, MAX_INT);
@@ -139,7 +133,7 @@ contract Staking is Ownable, IOutputReceiverV3, ERC165, IAddressLock {
         // Strictly limit access
         require(fnftId <= previousStakingIDCutoff || stakingConfigs[fnftId].timePeriod > 0, 'Nonexistent!');
 
-        uint totalQuantity = quantity * ITokenVault(vault).getFNFT(fnftId).depositAmount;
+        uint totalQuantity = getValue(fnftId);
         IRewardsHandler(rewardsHandlerAddress).claimRewards(fnftId, owner);
         if (asset == revestAddress) {
             IRewardsHandler(rewardsHandlerAddress).updateBasicShares(fnftId, 0);
@@ -155,8 +149,7 @@ contract Staking is Ownable, IOutputReceiverV3, ERC165, IAddressLock {
     function handleTimelockExtensions(uint fnftId, uint expiration, address caller) external override {}
 
     function handleAdditionalDeposit(uint fnftId, uint amountToDeposit, uint quantity, address caller) external override {
-        address vault = getRegistry().getTokenVault();
-        require(_msgSender() == vault, "E016");
+        require(_msgSender() == getRegistry().getRevest(), "E016");
         require(quantity == 1);
         require(additionalEnabled, 'Not allowed!');
         _depositAdditionalToStake(fnftId, amountToDeposit, caller);
@@ -189,7 +182,7 @@ contract Staking is Ownable, IOutputReceiverV3, ERC165, IAddressLock {
 
 
     function _stake(address stakeToken, uint amount, uint monthsMaturity) private returns (uint){
-        require (stakeToken == lpAddress || stakeToken == revestAddress, "Not valid stake token");
+        require (stakeToken == lpAddress || stakeToken == revestAddress, "E079");
         require(monthsMaturity == 1 || monthsMaturity == 3 || monthsMaturity == 6 || monthsMaturity == 12, 'E055');
         IERC20(stakeToken).safeTransferFrom(msg.sender, address(this), amount);
 
@@ -216,11 +209,16 @@ contract Staking is Ownable, IOutputReceiverV3, ERC165, IAddressLock {
         uint interestRate = getInterestRate(monthsMaturity);
         uint allocPoint = amount * interestRate;
 
-        StakingData memory cfg = StakingData(monthsMaturity, block.timestamp);
+        StakingData memory cfg = StakingData(monthsMaturity, block.timestamp, amount);
         stakingConfigs[fnftId] = cfg;
 
-        IRewardsHandler(rewardsHandlerAddress).updateLPShares(fnftId, allocPoint);
-        emit StakedRevest(monthsMaturity, false, amount, fnftId);
+        if(stakeToken == lpAddress) {
+            IRewardsHandler(rewardsHandlerAddress).updateLPShares(fnftId, allocPoint);
+        } else if (stakeToken == revestAddress) {
+            IRewardsHandler(rewardsHandlerAddress).updateBasicShares(fnftId, allocPoint);
+        }
+        
+        emit StakedRevest(monthsMaturity, stakeToken == revestAddress, amount, fnftId);
         emit DepositERC20OutputReceiver(_msgSender(), stakeToken, amount, fnftId, '');
         return fnftId;
     }
@@ -239,6 +237,7 @@ contract Staking is Ownable, IOutputReceiverV3, ERC165, IAddressLock {
 
         //Write new, extended unlock date
         stakingConfigs[fnftId].dateLockedFrom = block.timestamp;
+        stakingConfigs[fnftId].amount = stakingConfigs[fnftId].amount + amount;
         //Retreive current allocation points – WETH and RVST implicitly have identical alloc points
         uint oldAllocPoints = IRewardsHandler(rewardsHandlerAddress).getAllocPoint(fnftId, revestAddress, asset == revestAddress);
         uint allocPoints = amount * getInterestRate(time) + oldAllocPoints;
@@ -306,16 +305,14 @@ contract Staking is Ownable, IOutputReceiverV3, ERC165, IAddressLock {
 
     /// Can the stake be unlocked?
     function isUnlockable(uint fnftId, uint) external view override returns (bool) {
-        uint timePeriod = stakingConfigs[fnftId].timePeriod;
-        uint depositTime;
         if(fnftId <= previousStakingIDCutoff) {
-            (, timePeriod) = IOldStaking(oldStakingContract).config(fnftId);
-            depositTime =  ILockManager(getRegistry().getLockManager()).fnftIdToLock(fnftId).creationTime;
-        } else {
-            depositTime = stakingConfigs[fnftId].dateLockedFrom;
+            return Staking(oldStakingContract).isUnlockable(fnftId, 0);
         }
+        uint timePeriod = stakingConfigs[fnftId].timePeriod;
+        uint depositTime = stakingConfigs[fnftId].dateLockedFrom;
+
         uint window = getWindow(timePeriod);
-        bool mature = block.timestamp - depositTime > timePeriod;
+        bool mature = block.timestamp - depositTime > (timePeriod * 30 * ONE_DAY);
         bool window_open = (block.timestamp - depositTime) % (timePeriod * 30 * ONE_DAY) < window;
         return mature && window_open;
     }
@@ -339,7 +336,7 @@ contract Staking is Ownable, IOutputReceiverV3, ERC165, IAddressLock {
 
     function getCustomMetadata(uint fnftId) external view override returns (string memory) {
         if(fnftId <= previousStakingIDCutoff) {
-            return IOldStaking(oldStakingContract).customMetadataUrl();
+            return Staking(oldStakingContract).getCustomMetadata(fnftId);
         } else {
             return customMetadataUrl;
         }
@@ -361,15 +358,19 @@ contract Staking is Ownable, IOutputReceiverV3, ERC165, IAddressLock {
         uint timePeriod = stakingConfigs[fnftId].timePeriod;
         uint nextUnlock = block.timestamp + ((timePeriod * 30 days) - ((block.timestamp - stakingConfigs[fnftId].dateLockedFrom)  % (timePeriod * 30 days)));
         //This parameter has been modified for new stakes
-        return abi.encode(revestRewards, wethRewards, timePeriod, stakingConfigs[fnftId].dateLockedFrom, isRevestToken ? revestAddress : lpAddress, stakingConfigs[fnftId].dateLockedFrom, nextUnlock);
+        return abi.encode(revestRewards, wethRewards, timePeriod, stakingConfigs[fnftId].dateLockedFrom, isRevestToken ? revestAddress : lpAddress, nextUnlock);
     }
 
     function getAddressRegistry() external view override returns (address) {
         return addressRegistry;
     }
 
-    function getValue(uint fnftId) external view override returns (uint) {
-        return ITokenVault(getRegistry().getTokenVault()).getFNFT(fnftId).depositAmount;
+    function getValue(uint fnftId) public view override returns (uint) {
+        if(fnftId <= previousStakingIDCutoff) {
+            return ITokenVault(getRegistry().getTokenVault()).getFNFT(fnftId).depositAmount;
+        } else {
+            return stakingConfigs[fnftId].amount;
+        }
     }
 
     function getAsset(uint fnftId) external view override returns (address) {
