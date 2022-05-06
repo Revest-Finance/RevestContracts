@@ -7,7 +7,7 @@ import '@openzeppelin/contracts/utils/introspection/ERC165Checker.sol';
 import "./interfaces/IRevest.sol";
 import "./interfaces/IAddressRegistry.sol";
 import "./interfaces/ILockManager.sol";
-import "./interfaces/ITokenVault.sol";
+import "./interfaces/ITokenVaultV2.sol";
 import "./interfaces/IRewardsHandler.sol";
 import "./interfaces/IOutputReceiver.sol";
 import "./interfaces/IOutputReceiverV2.sol";
@@ -21,7 +21,7 @@ import "./lib/IWETH.sol";
  * This is the entrypoint for the frontend, as well as third-party Revest integrations.
  * Solidity style guide ordering: receive, fallback, external, public, internal, private - within a grouping, view and pure go last - https://docs.soliditylang.org/en/latest/style-guide.html
  */
-contract RevestA3_2 is IRevest, RevestAccessControl, RevestReentrancyGuard {
+contract RevestA4 is IRevest, RevestAccessControl, RevestReentrancyGuard {
     using SafeERC20 for IERC20;
     using ERC165Checker for address;
 
@@ -30,6 +30,8 @@ contract RevestA3_2 is IRevest, RevestAccessControl, RevestReentrancyGuard {
     bytes4 public constant OUTPUT_RECEIVER_INTERFACE_V3_ID = type(IOutputReceiverV3).interfaceId;
 
     address immutable WETH;
+
+    /// Point at which FNFTs should point to the new token vault
 
     uint public erc20Fee; // out of 1000
     uint private constant erc20multiplierPrecision = 1000;
@@ -40,21 +42,15 @@ contract RevestA3_2 is IRevest, RevestAccessControl, RevestReentrancyGuard {
 
     mapping(address => bool) public whitelisted;
 
-    mapping(address => address) public migrations;
-
+    
     /**
      * @dev Primary constructor to create the Revest controller contract
      */
     constructor(
         address provider, 
-        address weth, 
-        address[] memory oldOutputs, 
-        address[] memory newOutputs
+        address weth
     ) RevestAccessControl(provider) {
         WETH = weth;
-        for(uint i = 0; i < oldOutputs.length; i++) {
-            migrations[oldOutputs[i]] = newOutputs[i];
-        }
     }
 
     // PUBLIC FUNCTIONS
@@ -81,6 +77,7 @@ contract RevestA3_2 is IRevest, RevestAccessControl, RevestReentrancyGuard {
             timeLock.timeLockExpiry = endTime;
             getLockManager().createLock(fnftId, timeLock);
         }
+
         doMint(recipients, quantities, fnftId, fnftConfig, msg.value);
 
         emit FNFTTimeLockMinted(fnftConfig.asset, _msgSender(), fnftId, endTime, quantities, fnftConfig);
@@ -204,8 +201,9 @@ contract RevestA3_2 is IRevest, RevestAccessControl, RevestReentrancyGuard {
         manager.createLock(fnftId, lock);
 
         // Callback to IOutputReceiverV3
+        // NB: All IOuputReceiver systems should be either marked non-reentrant or ensure they follow checks-effects-interactions
         if(config.pipeToContract != address(0) && config.pipeToContract.supportsInterface(OUTPUT_RECEIVER_INTERFACE_V3_ID)) {
-            IOutputReceiverV3(config.pipeToContract).handleTimelockExtensions(fnftId, endTime, msg.sender);
+            IOutputReceiverV3(config.pipeToContract).handleTimelockExtensions(fnftId, endTime, _msgSender());
         }
 
         emit FNFTMaturityExtended(_msgSender(), fnftId, endTime);
@@ -216,8 +214,6 @@ contract RevestA3_2 is IRevest, RevestAccessControl, RevestReentrancyGuard {
     /**
      * Amount will be per FNFT. So total ERC20s needed is amount * quantity.
      * We don't charge an ETH fee on depositAdditional, but do take the erc20 percentage.
-     * Users can deposit additional into their own
-     * Otherwise, if not an owner, they must distribute to all FNFTs equally
      */
     function depositAdditionalToFNFT(
         uint fnftId,
@@ -226,34 +222,44 @@ contract RevestA3_2 is IRevest, RevestAccessControl, RevestReentrancyGuard {
     ) external override nonReentrant returns (uint) {
         address vault = addressesProvider.getTokenVault();
         IRevest.FNFTConfig memory fnft = ITokenVault(vault).getFNFT(fnftId);
-        require(fnftId < getFNFTHandler().getNextId(), "E007");
-        require(fnft.isMulti, "E034");
-        require(fnft.depositStopTime < block.timestamp || fnft.depositStopTime == 0, "E035");
-        require(quantity > 0, "E070");
-
         address handler = addressesProvider.getRevestFNFT();
+        require(fnftId < IFNFTHandler(handler).getNextId(), "E007");
+        require(fnft.isMulti, "E034");
+        require(fnft.depositStopTime > block.timestamp || fnft.depositStopTime == 0, "E035");
+        require(quantity > 0, "E070");
+        // This line will disable all legacy FNFTs from using this function
+        // Unless they are using it for pass-through
+        require(fnft.depositMul == 0 || fnft.asset == address(0), 'E084');
+
         uint supply = IFNFTHandler(handler).getSupply(fnftId);
+        uint deposit = quantity * amount;
 
         // Future versions may reintroduce series splitting, if it is ever in demand
         require(quantity == supply, 'E083');
 
-        require(fnft.asset == address(0), 'TMP_BRK');
-        
-        // For now, ERC-20 deposits to TokenVault are disabled
-        // This breaks adding additional tokens to an RVST stake
-        // Functionality for this will be restored in the near future
-               
-        // Trigger copying any data on the output receiver here
-        // May not be as simple as just copy-pasting data, and it will be left up to devs
-        // To determine how to (and if) to implement this method
-        // Performed last to give outputRecevier acccess to all new state data
-        // We only allow this for things where thre is no real asset stored here, to ensure ERC20 interactions with TokenVault are not expected
-        if(fnft.asset == address(0) && fnft.pipeToContract != address(0) && fnft.pipeToContract.supportsInterface(OUTPUT_RECEIVER_INTERFACE_V2_ID)) {
-            if(fnft.pipeToContract.supportsInterface(OUTPUT_RECEIVER_INTERFACE_V3_ID)) {
-                IOutputReceiverV3(fnft.pipeToContract).handleAdditionalDeposit(fnftId, amount, quantity, msg.sender);
+        // Transfer the ERC20 fee to the admin address, leave it at that
+        if(!whitelisted[_msgSender()]) {
+            uint totalERC20Fee = erc20Fee * deposit / erc20multiplierPrecision;
+            if(totalERC20Fee > 0) {
+                // NB: The user has control of where this external call goes (fnft.asset)
+                IERC20(fnft.asset).safeTransferFrom(_msgSender(), addressesProvider.getAdmin(), totalERC20Fee);
             }
         }
-        emit FNFTAddionalDeposited(_msgSender(), 0, quantity, amount);
+
+
+        // Transfer to the smart wallet
+        if(fnft.asset != address(0)){
+            address smartWallet = ITokenVaultV2(vault).getFNFTAddress(fnftId);
+            // NB: The user has control of where this external call goes (fnft.asset)
+            IERC20(fnft.asset).safeTransferFrom(_msgSender(), smartWallet, deposit);
+            ITokenVaultV2(vault).recordAdditionalDeposit(_msgSender(), fnftId, deposit);
+        }
+                       
+        if(fnft.pipeToContract != address(0) && fnft.pipeToContract.supportsInterface(OUTPUT_RECEIVER_INTERFACE_V3_ID)) {
+            IOutputReceiverV3(fnft.pipeToContract).handleAdditionalDeposit(fnftId, amount, quantity, _msgSender());
+        }
+
+        emit FNFTAddionalDeposited(_msgSender(), fnftId, quantity, amount);
 
         return 0;
     }
@@ -271,15 +277,7 @@ contract RevestA3_2 is IRevest, RevestAccessControl, RevestReentrancyGuard {
         // Burn the FNFTs being exchanged
         IFNFTHandler(fnftHandler).burn(_msgSender(), fnftId, quantity);
         require(getLockManager().unlockFNFT(fnftId, _msgSender()), 'E082');
-        
         address vault = addressesProvider.getTokenVault();
-
-        // This code snippet auto-patches old staking contracts to the new staking contract
-        IRevest.FNFTConfig memory config = ITokenVault(vault).getFNFT(fnftId);
-        if(migrations[config.pipeToContract] != address(0)) {
-            config.pipeToContract = migrations[config.pipeToContract];
-            ITokenVault(vault).mapFNFTToToken(fnftId, config);
-        }
 
         ITokenVault(vault).withdrawToken(fnftId, quantity, _msgSender());
         emit FNFTWithdrawn(_msgSender(), fnftId, quantity);
@@ -309,6 +307,7 @@ contract RevestA3_2 is IRevest, RevestAccessControl, RevestReentrancyGuard {
         }
 
         // Gas optimization
+        // Will always be new token vault
         address vault = addressesProvider.getTokenVault();
 
         // Take fees
@@ -335,6 +334,7 @@ contract RevestA3_2 is IRevest, RevestAccessControl, RevestReentrancyGuard {
             if(fnftConfig.depositAmount > 0) {
                 uint totalERC20Fee = erc20Fee * totalQuantity * fnftConfig.depositAmount / erc20multiplierPrecision;
                 if(totalERC20Fee > 0) {
+                    // NB: The user has control of where this external call goes (fnftConfig.asset)
                     IERC20(fnftConfig.asset).safeTransferFrom(_msgSender(), addressesProvider.getAdmin(), totalERC20Fee);
                 }
             }
@@ -350,13 +350,15 @@ contract RevestA3_2 is IRevest, RevestAccessControl, RevestReentrancyGuard {
             require(weiValue >= fnftConfig.depositAmount, "E015");
         }
         
-
+        
         // Create the FNFT and update accounting within TokenVault
         ITokenVault(vault).createFNFT(fnftId, fnftConfig, totalQuantity, _msgSender());
 
         // Now, we move the funds to token vault from the message sender
         if(fnftConfig.asset != address(0)){
-            IERC20(fnftConfig.asset).safeTransferFrom(_msgSender(), vault, totalQuantity * fnftConfig.depositAmount);
+            address smartWallet = ITokenVaultV2(vault).getFNFTAddress(fnftId);
+            // NB: The user has control of where this external call goes (fnftConfig.asset)
+            IERC20(fnftConfig.asset).safeTransferFrom(_msgSender(), smartWallet, totalQuantity * fnftConfig.depositAmount);
         }
         // Mint NFT
         // Gas optimization
@@ -366,16 +368,6 @@ contract RevestA3_2 is IRevest, RevestAccessControl, RevestReentrancyGuard {
             getFNFTHandler().mint(recipients[0], fnftId, quantities[0], '');
         }
 
-    }
-
-    function burn(
-        address account,
-        uint id,
-        uint amount
-    ) internal {
-        address fnftHandler = addressesProvider.getRevestFNFT();
-        require(IFNFTHandler(fnftHandler).getSupply(id) - amount >= 0, "E025");
-        IFNFTHandler(fnftHandler).burn(account, id, amount);
     }
 
     function setFlatWeiFee(uint wethFee) external override onlyOwner {
@@ -402,8 +394,11 @@ contract RevestA3_2 is IRevest, RevestAccessControl, RevestReentrancyGuard {
     }
 
 
-    // Used to whitelist a contract for custom fee behavior
+    /// Used to whitelist a contract for custom fee behavior
     function modifyWhitelist(address contra, bool listed) external onlyOwner {
         whitelisted[contra] = listed;
     }
+
+    
+
 }
