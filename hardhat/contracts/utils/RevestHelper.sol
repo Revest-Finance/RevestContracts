@@ -7,7 +7,6 @@ import "../interfaces/ILockManager.sol";
 import "../interfaces/IRevest.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
-
 library RevestHelper {
 
  
